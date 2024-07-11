@@ -157,21 +157,25 @@ void connect_rdma(struct rdma_context *ctx, const char *server_name, int port) {
     char service[16];
     snprintf(service, sizeof(service), "%d", port);
 
+    printf("Resolving server address...\n");
     if (getaddrinfo(server_name, service, &hints, &addr)) {
         die("Failed to resolve server address");
     }
 
+    printf("Creating socket...\n");
     ctx->sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (ctx->sockfd < 0) {
         die("Failed to create socket");
     }
 
+    printf("Connecting to server...\n");
     if (connect(ctx->sockfd, addr->ai_addr, addr->ai_addrlen)) {
         die("Failed to connect to server");
     }
 
     freeaddrinfo(addr);
 
+    printf("Exchanging RDMA information...\n");
     // Exchange RDMA information
     if (send(ctx->sockfd, &ctx->mr->addr, sizeof(ctx->mr->addr), 0) != sizeof(ctx->mr->addr) ||
         send(ctx->sockfd, &ctx->mr->rkey, sizeof(ctx->mr->rkey), 0) != sizeof(ctx->mr->rkey)) {
@@ -182,6 +186,8 @@ void connect_rdma(struct rdma_context *ctx, const char *server_name, int port) {
         recv(ctx->sockfd, &ctx->remote_mr.rkey, sizeof(ctx->remote_mr.rkey), 0) != sizeof(ctx->remote_mr.rkey)) {
         die("Failed to receive remote MR info");
     }
+
+    printf("RDMA connection established successfully.\n");
 }
 
 void listen_rdma(struct rdma_context *ctx, int port) {
@@ -191,19 +197,23 @@ void listen_rdma(struct rdma_context *ctx, int port) {
         .sin_addr.s_addr = INADDR_ANY
     };
 
+    printf("Creating socket for listening...\n");
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) {
         die("Failed to create socket");
     }
 
+    printf("Binding to port %d...\n", port);
     if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr))) {
         die("Failed to bind socket");
     }
 
+    printf("Listening for connections...\n");
     if (listen(listen_fd, 1)) {
         die("Failed to listen on socket");
     }
 
+    printf("Waiting for client connection...\n");
     ctx->sockfd = accept(listen_fd, NULL, NULL);
     if (ctx->sockfd < 0) {
         die("Failed to accept connection");
@@ -211,6 +221,7 @@ void listen_rdma(struct rdma_context *ctx, int port) {
 
     close(listen_fd);
 
+    printf("Client connected. Exchanging RDMA information...\n");
     // Exchange RDMA information
     if (recv(ctx->sockfd, &ctx->remote_mr.addr, sizeof(ctx->remote_mr.addr), 0) != sizeof(ctx->remote_mr.addr) ||
         recv(ctx->sockfd, &ctx->remote_mr.rkey, sizeof(ctx->remote_mr.rkey), 0) != sizeof(ctx->remote_mr.rkey)) {
@@ -221,4 +232,6 @@ void listen_rdma(struct rdma_context *ctx, int port) {
         send(ctx->sockfd, &ctx->mr->rkey, sizeof(ctx->mr->rkey), 0) != sizeof(ctx->mr->rkey)) {
         die("Failed to send local MR info");
     }
+
+    printf("RDMA connection established successfully.\n");
 }

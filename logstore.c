@@ -36,13 +36,19 @@ int main(int argc, char *argv[]) {
     }
 
     int port = atoi(argv[1]);
+    printf("LogStore starting on port %d\n", port);
 
     struct logstore_context ctx;
     ctx.flush_lsn = 0;
     pthread_mutex_init(&ctx.flush_lsn_mutex, NULL);
 
+    printf("Creating RDMA context...\n");
     create_rdma_context(&ctx.rdma_ctx);
+    
+    printf("Listening for RDMA connection...\n");
     listen_rdma(&ctx.rdma_ctx, port);
+
+    printf("RDMA connection established.\n");
 
     pthread_t flush_thread;
     pthread_create(&flush_thread, NULL, background_flush, &ctx);
@@ -50,6 +56,7 @@ int main(int argc, char *argv[]) {
     printf("LogStore is ready to receive Xlogs.\n");
 
     for (int i = 0; i < NUM_XLOGS; i++) {
+        printf("Waiting for Xlog %d...\n", i+1);
         poll_completion(&ctx.rdma_ctx);
         printf("Received Xlog: %s\n", (char *)ctx.rdma_ctx.buffer + (i * XLOG_SIZE));
 
