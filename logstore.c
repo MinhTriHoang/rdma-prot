@@ -4,6 +4,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <netdb.h>
+#include <arpa/inet.h>
 
 #define NUM_XLOGS 10
 #define XLOG_SIZE 256
@@ -36,7 +38,16 @@ int main(int argc, char *argv[]) {
     }
 
     int port = atoi(argv[1]);
-    printf("LogStore starting on port %d\n", port);
+    
+    // Get the hostname and IP address
+    char hostname[256];
+    gethostname(hostname, sizeof(hostname));
+    
+    struct hostent *he = gethostbyname(hostname);
+    char ip_address[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, he->h_addr, ip_address, INET_ADDRSTRLEN);
+
+    printf("LogStore starting on %s (%s) port %d\n", hostname, ip_address, port);
 
     struct logstore_context ctx;
     ctx.flush_lsn = 0;

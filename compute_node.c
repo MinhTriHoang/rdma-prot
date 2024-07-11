@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <netdb.h>
+#include <arpa/inet.h>
 
 #define NUM_XLOGS 10
 #define XLOG_SIZE 256
@@ -10,20 +12,30 @@
 int main(int argc, char *argv[]) {
     if (argc != 3) {
         fprintf(stderr, "Usage: %s <logstore_server> <port>\n", argv[0]);
+        fprintf(stderr, "Example: %s db3.cs.purdue.edu 5555\n", argv[0]);
         return 1;
     }
 
     const char *logstore_server = argv[1];
     int port = atoi(argv[2]);
 
-    printf("Connecting to LogStore at %s:%d\n", logstore_server, port);
+    // Resolve the hostname to an IP address
+    struct hostent *he = gethostbyname(logstore_server);
+    if (he == NULL) {
+        fprintf(stderr, "Could not resolve hostname: %s\n", logstore_server);
+        return 1;
+    }
+    char ip_address[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, he->h_addr, ip_address, INET_ADDRSTRLEN);
+
+    printf("Connecting to LogStore at %s (%s):%d\n", logstore_server, ip_address, port);
 
     struct rdma_context ctx;
     printf("Creating RDMA context...\n");
     create_rdma_context(&ctx);
     
     printf("Connecting RDMA...\n");
-    connect_rdma(&ctx, logstore_server, port);
+    connect_rdma(&ctx, ip_address, port);
 
     printf("RDMA connection established.\n");
 
