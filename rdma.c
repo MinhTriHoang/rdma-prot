@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <unistd.h>
 
 void die(const char *message) {
     perror(message);
@@ -146,7 +147,6 @@ void poll_completion(struct rdma_context *ctx) {
     }
 }
 
-// Add this function to rdma.c
 void connect_rdma(struct rdma_context *ctx, const char *server_name, int port) {
     struct addrinfo *addr;
     struct addrinfo hints = {
@@ -171,4 +171,54 @@ void connect_rdma(struct rdma_context *ctx, const char *server_name, int port) {
     }
 
     freeaddrinfo(addr);
+
+    // Exchange RDMA information
+    if (send(ctx->sockfd, &ctx->mr->addr, sizeof(ctx->mr->addr), 0) != sizeof(ctx->mr->addr) ||
+        send(ctx->sockfd, &ctx->mr->rkey, sizeof(ctx->mr->rkey), 0) != sizeof(ctx->mr->rkey)) {
+        die("Failed to send local MR info");
+    }
+
+    if (recv(ctx->sockfd, &ctx->remote_mr.addr, sizeof(ctx->remote_mr.addr), 0) != sizeof(ctx->remote_mr.addr) ||
+        recv(ctx->sockfd, &ctx->remote_mr.rkey, sizeof(ctx->remote_mr.rkey), 0) != sizeof(ctx->remote_mr.rkey)) {
+        die("Failed to receive remote MR info");
+    }
+}
+
+void listen_rdma(struct rdma_context *ctx, int port) {
+    struct sockaddr_in addr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(port),
+        .sin_addr.s_addr = INADDR_ANY
+    };
+
+    int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd < 0) {
+        die("Failed to create socket");
+    }
+
+    if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr))) {
+        die("Failed to bind socket");
+    }
+
+    if (listen(listen_fd, 1)) {
+        die("Failed to listen on socket");
+    }
+
+    ctx->sockfd = accept(listen_fd, NULL, NULL);
+    if (ctx->sockfd < 0) {
+        die("Failed to accept connection");
+    }
+
+    close(listen_fd);
+
+    // Exchange RDMA information
+    if (recv(ctx->sockfd, &ctx->remote_mr.addr, sizeof(ctx->remote_mr.addr), 0) != sizeof(ctx->remote_mr.addr) ||
+        recv(ctx->sockfd, &ctx->remote_mr.rkey, sizeof(ctx->remote_mr.rkey), 0) != sizeof(ctx->remote_mr.rkey)) {
+        die("Failed to receive remote MR info");
+    }
+
+    if (send(ctx->sockfd, &ctx->mr->addr, sizeof(ctx->mr->addr), 0) != sizeof(ctx->mr->addr) ||
+        send(ctx->sockfd, &ctx->mr->rkey, sizeof(ctx->mr->rkey), 0) != sizeof(ctx->mr->rkey)) {
+        die("Failed to send local MR info");
+    }
 }
