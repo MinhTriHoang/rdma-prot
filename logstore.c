@@ -9,6 +9,12 @@
 
 #define NUM_XLOGS 10
 #define XLOG_SIZE 256
+#define CHECK_INTERVAL_US 1000 // Check every 1ms
+
+struct xlog_entry {
+    uint32_t flag;
+    char data[XLOG_SIZE];
+};
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -17,7 +23,6 @@ int main(int argc, char *argv[]) {
     }
 
     int port = atoi(argv[1]);
-    
     printf("LogStore starting on port %d\n", port);
 
     struct resources res;
@@ -25,7 +30,6 @@ int main(int argc, char *argv[]) {
     resources_init(&res);
 
     config.tcp_port = port;
-    
 
     if (resources_create(&res) != 0) {
         fprintf(stderr, "Failed to create RDMA resources\n");
@@ -68,30 +72,21 @@ int main(int argc, char *argv[]) {
 
     printf("RDMA connection established. Waiting for Xlogs...\n");
 
-    // Receive xlogs
-    // Replace the existing loop with this
-    for (int i = 0; i < NUM_XLOGS; i++) {
-        if (post_receive(&res) != 0) {
-            fprintf(stderr, "Failed to post receive for Xlog %d\n", i);
-            // Don't break, try to post the remaining receives
-        } else {
-            fprintf(stdout, "Posted receive for Xlog %d\n", i);
+    struct xlog_entry *xlog_buffer = (struct xlog_entry *)res.buf;
+
+    int xlogs_received = 0;
+    while (xlogs_received < NUM_XLOGS) {
+        for (int i = 0; i < NUM_XLOGS; i++) {
+            if (xlog_buffer[i].flag == 1) {
+                printf("Received Xlog %d: %s\n", i, xlog_buffer[i].data);
+                xlog_buffer[i].flag = 0;  // Reset the flag
+                xlogs_received++;
+            }
         }
+        usleep(CHECK_INTERVAL_US);
     }
 
-        printf("RDMA connection established. Waiting for Xlogs...\n");
-
-    for (int i = 0; i < NUM_XLOGS; i++) {
-        if (poll_completion(&res) != 0) {
-            fprintf(stderr, "Error receiving Xlog %d\n", i);
-        } else {
-            fprintf(stdout, "Received Xlog %d: %s\n", i, res.buf);
-        }
-    }
-    
     printf("All Xlogs received successfully.\n");
-
-
 
     resources_destroy(&res);
 

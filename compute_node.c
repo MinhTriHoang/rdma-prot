@@ -8,50 +8,17 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-
 #define NUM_XLOGS 10
 #define XLOG_SIZE 256
 
-// Function to perform a simple RDMA read test
-int test_rdma_read(struct resources *res) {
-    char test_data[64] = "Test RDMA Read Data";
-    memcpy(res->buf, test_data, strlen(test_data) + 1);
-
-    fprintf(stdout, "Performing RDMA Write test\n");
-    fprintf(stdout, "Local buffer content: %s\n", res->buf);
-    fprintf(stdout, "Remote buffer address: 0x%lx\n", (unsigned long)res->remote_props.addr);
-    fprintf(stdout, "Remote rkey: 0x%x\n", res->remote_props.rkey);
-
-    if (post_send(res, IBV_WR_RDMA_WRITE) != 0 || poll_completion(res) != 0) {
-        fprintf(stderr, "Failed to perform RDMA Write for test\n");
-        return -1;
-    }
-
-    // Clear local buffer
-    memset(res->buf, 0, XLOG_SIZE);
-
-    fprintf(stdout, "Performing RDMA Read test\n");
-    if (post_send(res, IBV_WR_RDMA_READ) != 0 || poll_completion(res) != 0) {
-        fprintf(stderr, "Failed to perform RDMA Read for test\n");
-        return -1;
-    }
-
-    fprintf(stdout, "RDMA Read result: %s\n", res->buf);
-
-    // Verify the data
-    if (strcmp(res->buf, test_data) != 0) {
-        fprintf(stderr, "RDMA Read test failed: data mismatch\n");
-        return -1;
-    }
-
-    printf("RDMA Read test passed successfully\n");
-    return 0;
-}
+struct xlog_entry {
+    uint32_t flag;
+    char data[XLOG_SIZE];
+};
 
 int main(int argc, char *argv[]) {
     struct resources res;
     struct sockaddr_in addr;
-    
 
     if (argc != 3) {
         fprintf(stderr, "Usage: %s <logstore_ip> <port>\n", argv[0]);
@@ -61,7 +28,6 @@ int main(int argc, char *argv[]) {
 
     config.tcp_port = atoi(argv[2]);
 
-    // Set up the IP address
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(config.tcp_port);
@@ -95,65 +61,31 @@ int main(int argc, char *argv[]) {
     }
 
     printf("RDMA connection established.\n");
-    
 
-    int retry_count = 3;
-    while (retry_count > 0) {
-        if (test_rdma_read(&res) == 0) {
-            break;
-        }
-        fprintf(stderr, "RDMA Read test failed, retrying... (%d attempts left)\n", retry_count - 1);
-        retry_count--;
-        sleep(1);  // Wait a second before retrying
-    }
+    struct xlog_entry *xlog_buffer = (struct xlog_entry *)res.buf;
 
-    if (retry_count == 0) {
-        fprintf(stderr, "RDMA Read test failed after multiple attempts\n");
-        resources_destroy(&res);
-        return 1;
-    }
-
-    // Perform RDMA Read test
-    if (test_rdma_read(&res) != 0) {
-        fprintf(stderr, "RDMA Read test failed\n");
-        resources_destroy(&res);
-        return 1;
-    }
-
-    // Prepare and send xlogs
     for (int i = 0; i < NUM_XLOGS; i++) {
-        char xlog[XLOG_SIZE];
-        snprintf(xlog, XLOG_SIZE, "Xlog-%d", i);
+        snprintf(xlog_buffer[i].data, XLOG_SIZE, "Xlog-%d", i);
+        xlog_buffer[i].flag = 1;
 
-        printf("Sending Xlog: %s\n", xlog);
+        printf("Sending Xlog: %s\n", xlog_buffer[i].data);
 
-        // Copy xlog to RDMA buffer
-        memcpy(res.buf, xlog, strlen(xlog) + 1);
-
-        // Perform RDMA Write
-        if (post_send(&res, IBV_WR_RDMA_WRITE) != 0) {
-            fprintf(stderr, "Failed to post RDMA Write for Xlog: %s\n", xlog);
+        if (rdma_write(&res, i * sizeof(struct xlog_entry), sizeof(struct xlog_entry)) != 0) {
+            fprintf(stderr, "Failed to perform RDMA Write for Xlog: %s\n", xlog_buffer[i].data);
             continue;
         }
 
-        if (poll_completion(&res) != 0) {
-            fprintf(stderr, "Error in RDMA Write for Xlog: %s\n", xlog);
-            continue;
-        }
+        printf("Xlog sent successfully: %s\n", xlog_buffer[i].data);
 
-        printf("Xlog sent successfully: %s\n", xlog);
-
-        // Sleep for a short time between sends
-        usleep(10000);  // 100ms
+        usleep(10000);  // 10ms between sends
     }
-    
+
     printf("All Xlogs sent. Cleaning up...\n");
 
     if (resources_destroy(&res) != 0) {
         fprintf(stderr, "Failed to destroy resources\n");
         return 1;
     }
-
 
     printf("Resources destroyed. Exiting.\n");
     return 0;

@@ -124,6 +124,26 @@ sock_connect_exit:
 	return sockfd;
 }
 
+int rdma_write(struct resources *res, size_t offset, size_t length) {
+    struct ibv_send_wr wr, *bad_wr = NULL;
+    struct ibv_sge sge;
+
+    memset(&wr, 0, sizeof(wr));
+    wr.wr_id = 0;
+    wr.opcode = IBV_WR_RDMA_WRITE;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.send_flags = IBV_SEND_SIGNALED;
+    wr.wr.rdma.remote_addr = res->remote_props.addr + offset;
+    wr.wr.rdma.rkey = res->remote_props.rkey;
+
+    sge.addr = (uintptr_t)res->buf + offset;
+    sge.length = length;
+    sge.lkey = res->mr->lkey;
+
+    return ibv_post_send(res->qp, &wr, &bad_wr);
+}
+
 static int sock_sync_data(int sock, int xfer_size, char *local_data, char *remote_data)
 {
     fprintf(stdout, "Entering function: %s\n", __func__);
@@ -147,41 +167,7 @@ static int sock_sync_data(int sock, int xfer_size, char *local_data, char *remot
     return rc;
 }
 
-int poll_completion(struct resources *res)
-{
-    fprintf(stdout, "Entering function: %s\n", __func__);
-    struct ibv_wc wc;
-    unsigned long start_time_msec;
-    unsigned long cur_time_msec;
-    struct timeval cur_time;
-    int poll_result;
-    int rc = 0;
 
-    gettimeofday(&cur_time, NULL);
-    start_time_msec = (cur_time.tv_sec * 1000) + (cur_time.tv_usec / 1000);
-
-    do {
-        poll_result = ibv_poll_cq(res->cq, 1, &wc);
-        gettimeofday(&cur_time, NULL);
-        cur_time_msec = (cur_time.tv_sec * 1000) + (cur_time.tv_usec / 1000);
-    } while ((poll_result == 0) && ((cur_time_msec - start_time_msec) < MAX_POLL_CQ_TIMEOUT));
-
-    if (poll_result < 0) {
-        fprintf(stderr, "poll CQ failed\n");
-        rc = 1;
-    } else if (poll_result == 0) {
-        fprintf(stderr, "completion wasn't found in the CQ after timeout\n");
-        rc = 1;
-    } else {
-        fprintf(stdout, "completion was found in CQ with status 0x%x\n", wc.status);
-        if (wc.status != IBV_WC_SUCCESS) {
-            fprintf(stderr, "got bad completion with status: 0x%x, vendor syndrome: 0x%x\n", wc.status, wc.vendor_err);
-            fprintf(stderr, "Completion error description: %s\n", ibv_wc_status_str(wc.status));
-            rc = 1;
-        }
-    }
-    return rc;
-}
 
 int post_send(struct resources *res, int opcode)
 {
@@ -251,33 +237,6 @@ int post_send(struct resources *res, int opcode)
     return rc;
 }
 
-int post_receive(struct resources *res)
-{
-    fprintf(stdout, "Entering function: %s\n", __func__);
-    struct ibv_recv_wr rr;
-    struct ibv_sge sge;
-    struct ibv_recv_wr *bad_wr;
-    int rc;
-
-    memset(&sge, 0, sizeof(sge));
-    sge.addr = (uintptr_t)res->buf;
-    sge.length = MSG_SIZE;
-    sge.lkey = res->mr->lkey;
-
-    memset(&rr, 0, sizeof(rr));
-    rr.next = NULL;
-    rr.wr_id = 0;
-    rr.sg_list = &sge;
-    rr.num_sge = 1;
-
-    rc = ibv_post_recv(res->qp, &rr, &bad_wr);
-    if (rc) {
-        fprintf(stderr, "ibv_post_recv failed with error: %d\n", rc);
-    }
-    else
-        fprintf(stdout, "Receive Request was posted\n");
-    return rc;
-}
 
 
 
@@ -287,6 +246,8 @@ void resources_init(struct resources *res)
     memset(res, 0, sizeof *res);
     res->sock = -1;
 }
+
+
 
 int resources_create(struct resources *res)
 {
