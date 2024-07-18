@@ -1,8 +1,14 @@
-compute_node: compute_node.c rdma.c
-	cc compute_node.c rdma.c -o compute_node -g -libverbs -lpthread
+CC=gcc
+CFLAGS=-g -Wall
+LDFLAGS=-libverbs	-lm
 
-logstore: logstore.c rdma.c
-	cc logstore.c rdma.c -o logstore -g -libverbs -lpthread
+all: compute_node logstore
+
+compute_node: compute_node.c rdma.c rdma.h
+	$(CC) $(CFLAGS) -o compute_node compute_node.c rdma.c $(LDFLAGS)
+
+logstore: logstore.c rdma.c rdma.h
+	$(CC) $(CFLAGS) -o logstore logstore.c rdma.c $(LDFLAGS)
 
 clean:
-	rm -rf ./*.o ./compute_node ./logstore
+	rm -f compute_node logstore

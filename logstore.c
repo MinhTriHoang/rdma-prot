@@ -3,33 +3,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <pthread.h>
-#include <netdb.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 
 #define NUM_XLOGS 10
 #define XLOG_SIZE 256
-
-struct logstore_context {
-    struct rdma_context rdma_ctx;
-    uint64_t flush_lsn;
-    pthread_mutex_t flush_lsn_mutex;
-};
-
-void *background_flush(void *arg) {
-    struct logstore_context *ctx = (struct logstore_context *)arg;
-
-    while (1) {
-        sleep(5); // Simulate periodic flushing
-
-        pthread_mutex_lock(&ctx->flush_lsn_mutex);
-        ctx->flush_lsn++;
-        printf("Flushed LSN %lu to disk\n", ctx->flush_lsn);
-        pthread_mutex_unlock(&ctx->flush_lsn_mutex);
-    }
-
-    return NULL;
-}
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -39,50 +18,82 @@ int main(int argc, char *argv[]) {
 
     int port = atoi(argv[1]);
     
-    // Get the hostname and IP address
-    char hostname[256];
-    gethostname(hostname, sizeof(hostname));
+    printf("LogStore starting on port %d\n", port);
+
+    struct resources res;
+    struct sockaddr_in addr;
+    resources_init(&res);
+
+    config.tcp_port = port;
     
-    struct hostent *he = gethostbyname(hostname);
-    char ip_address[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, he->h_addr, ip_address, INET_ADDRSTRLEN);
 
-    printf("LogStore starting on %s (%s) port %d\n", hostname, ip_address, port);
-
-    struct logstore_context ctx;
-    ctx.flush_lsn = 0;
-    pthread_mutex_init(&ctx.flush_lsn_mutex, NULL);
-
-    printf("Creating RDMA context...\n");
-    create_rdma_context(&ctx.rdma_ctx);
-    
-    printf("Listening for RDMA connection...\n");
-    listen_rdma(&ctx.rdma_ctx, port);
-
-    printf("RDMA connection established.\n");
-
-    pthread_t flush_thread;
-    pthread_create(&flush_thread, NULL, background_flush, &ctx);
-
-    printf("LogStore is ready to receive Xlogs.\n");
-
-    for (int i = 0; i < NUM_XLOGS; i++) {
-        printf("Waiting for Xlog %d...\n", i+1);
-        poll_completion(&ctx.rdma_ctx);
-        printf("Received Xlog: %s\n", (char *)ctx.rdma_ctx.buffer + (i * XLOG_SIZE));
-
-        pthread_mutex_lock(&ctx.flush_lsn_mutex);
-        ctx.flush_lsn++;
-        pthread_mutex_unlock(&ctx.flush_lsn_mutex);
+    if (resources_create(&res) != 0) {
+        fprintf(stderr, "Failed to create RDMA resources\n");
+        return 1;
     }
 
-    printf("LogStore has received all Xlogs.\n");
+    printf("Waiting for RDMA connection...\n");
 
-    // Wait for the background flush thread to finish (it won't in this case)
-    pthread_join(flush_thread, NULL);
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        fprintf(stderr, "Failed to create socket\n");
+        return 1;
+    }
 
-    destroy_rdma_context(&ctx.rdma_ctx);
-    pthread_mutex_destroy(&ctx.flush_lsn_mutex);
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port);
+
+    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        fprintf(stderr, "Failed to bind to port\n");
+        return 1;
+    }
+
+    if (listen(sockfd, 1) < 0) {
+        fprintf(stderr, "Failed to listen on socket\n");
+        return 1;
+    }
+
+    res.sock = accept(sockfd, NULL, NULL);
+    if (res.sock < 0) {
+        fprintf(stderr, "Failed to accept connection\n");
+        return 1;
+    }
+
+    if (connect_qp(&res) != 0) {
+        fprintf(stderr, "Failed to connect QPs\n");
+        return 1;
+    }
+
+    printf("RDMA connection established. Waiting for Xlogs...\n");
+
+    // Receive xlogs
+    // Replace the existing loop with this
+    for (int i = 0; i < NUM_XLOGS; i++) {
+        if (post_receive(&res) != 0) {
+            fprintf(stderr, "Failed to post receive for Xlog %d\n", i);
+            // Don't break, try to post the remaining receives
+        } else {
+            fprintf(stdout, "Posted receive for Xlog %d\n", i);
+        }
+    }
+
+        printf("RDMA connection established. Waiting for Xlogs...\n");
+
+    for (int i = 0; i < NUM_XLOGS; i++) {
+        if (poll_completion(&res) != 0) {
+            fprintf(stderr, "Error receiving Xlog %d\n", i);
+        } else {
+            fprintf(stdout, "Received Xlog %d: %s\n", i, res.buf);
+        }
+    }
+    
+    printf("All Xlogs received successfully.\n");
+
+
+
+    resources_destroy(&res);
 
     return 0;
 }
